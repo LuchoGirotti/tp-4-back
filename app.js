@@ -53,14 +53,15 @@ app.post('/crearusuario', async (req, res) => {
 
 app.post('/login', async (req, res) => {
   try {
-    const { nombre, password } = req.body;
-    if (!nombre || !password) {
+    const { id, password } = req.body;
+    if (!id || !password) {
       return res.status(400).json({ error: 'Faltan datos' });
     }
     
     const client = new Client(config);
     await client.connect();
-    const userResult = await client.query('SELECT id, nombre, password FROM usuario WHERE nombre = $1', [nombre]);
+
+    const userResult = await client.query('SELECT id, nombre, password FROM usuario WHERE id = $1', [id]);
     
     if (userResult.rows.length === 0) {
       await client.end();
@@ -99,7 +100,47 @@ app.post('/login', async (req, res) => {
     console.error('Error en login:', error);
     res.status(500).json({ error: error.message });
   }
-})
+});
+
+app.post('/escucho', async (req, res) => {
+  try {
+    const { token } = req.body;
+    if (!token) {
+      return res.status(400).json({ error: 'Token requerido' });
+    }
+
+    let payload;
+    try {
+      payload = jwt.verify(token, process.env.JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ error: 'Token invalido' });
+    }
+
+    const userId = payload.userId;
+
+    const client = new Client(config);
+    await client.connect();
+
+    const query = `
+      SELECT e.id, c.nombre AS cancion_nombre, e.reproducciones
+      FROM escucha e
+      JOIN cancion c ON e.cancionid = c.id
+      WHERE e.usuarioid = $1
+    `;
+
+    const result = await client.query(query, [userId]);
+    await client.end();
+
+    res.json({
+      usuario: payload.nombre,
+      canciones_escuchadas: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error en /escucho:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
 
 app.listen(PORT, () => {
   console.log(`✅ Server is running on port ${PORT}`);
