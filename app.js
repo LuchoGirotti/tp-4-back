@@ -11,8 +11,6 @@ const app = express()
 app.use(express.json())
 const PORT = 8000
 
-
-
 app.get('/', (req, res) => {
   res.send('API funcionando')
 })
@@ -20,23 +18,23 @@ app.get('/', (req, res) => {
 app.post('/crearusuario', async (req, res) => {
   
   try {
-    const { nombre, password } = req.body;
-    if (!nombre || !password) {
+    const { userid, nombre, password } = req.body;
+    if (!userid || !password || !nombre) {
       return res.status(400).json({ error: 'Faltan datos' });
     }
     
     const client = new Client(config);
     await client.connect();
 
-    const existingUser = await client.query('SELECT id FROM usuario WHERE nombre = $1', [nombre]);
+    const existingUser = await client.query('SELECT userid FROM usuario WHERE userid = $1', [userid]);
     if (existingUser.rows.length > 0) {
       await client.end();
       return res.status(409).json({ error: 'El usuario ya existe' });
     }
 
     const result = await client.query(
-      'INSERT INTO usuario (nombre, password) VALUES ($1, $2) RETURNING id, nombre',
-      [nombre, await bcrypt.hash(password, 10)]
+      'INSERT INTO usuario (userid, nombre, password) VALUES ($1, $2, $3) RETURNING userid, nombre',
+      [userid, nombre, await bcrypt.hash(password, 10)]
     );
 
     await client.end();
@@ -53,15 +51,15 @@ app.post('/crearusuario', async (req, res) => {
 
 app.post('/login', async (req, res) => {
   try {
-    const { id, password } = req.body;
-    if (!id || !password) {
+    const { userid, password } = req.body;
+    if (!userid || !password) {
       return res.status(400).json({ error: 'Faltan datos' });
     }
     
     const client = new Client(config);
     await client.connect();
 
-    const userResult = await client.query('SELECT id, nombre, password FROM usuario WHERE id = $1', [id]);
+    const userResult = await client.query('SELECT userid, nombre, password FROM usuario WHERE userid = $1', [userid]);
     
     if (userResult.rows.length === 0) {
       await client.end();
@@ -80,7 +78,7 @@ app.post('/login', async (req, res) => {
 
     const token = jwt.sign(
       { 
-        userId: user.id, 
+        userid: user.userid,
         nombre: user.nombre 
       },
       process.env.JWT_SECRET,
@@ -91,7 +89,7 @@ app.post('/login', async (req, res) => {
       message: 'Login exitoso',
       token: token,
       usuario: {
-        id: user.id,
+        userid: user.userid,
         nombre: user.nombre
       }
     });
@@ -104,11 +102,13 @@ app.post('/login', async (req, res) => {
 
 app.post('/escucho', async (req, res) => {
   try {
-    const { token } = req.body;
-    if (!token) {
-      return res.status(400).json({ error: 'Token requerido' });
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(400).json({ error: 'Token de autorización requerido' });
     }
 
+    const token = authHeader.split(' ')[1];
+    
     let payload;
     try {
       payload = jwt.verify(token, process.env.JWT_SECRET);
@@ -116,7 +116,7 @@ app.post('/escucho', async (req, res) => {
       return res.status(401).json({ error: 'Token invalido' });
     }
 
-    const userId = payload.userId;
+    const userid = payload.userid;
 
     const client = new Client(config);
     await client.connect();
@@ -125,10 +125,10 @@ app.post('/escucho', async (req, res) => {
       SELECT e.id, c.nombre AS cancion_nombre, e.reproducciones
       FROM escucha e
       JOIN cancion c ON e.cancionid = c.id
-      WHERE e.usuarioid = $1
+      WHERE e.userid = $1
     `;
 
-    const result = await client.query(query, [userId]);
+    const result = await client.query(query, [userid]);
     await client.end();
 
     res.json({
