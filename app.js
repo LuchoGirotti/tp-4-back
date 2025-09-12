@@ -100,7 +100,7 @@ app.post('/login', async (req, res) => {
   }
 });
 
-app.post('/escucho', async (req, res) => {
+app.get('/escucho', async (req, res) => {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
