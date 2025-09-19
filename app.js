@@ -11,14 +11,73 @@ const app = express()
 app.use(express.json())
 const PORT = 8000
 
+const verifyToken = (req, res, next) => {
+  try {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({ error: 'Token de autorización requerido' });
+    }
+
+    const token = authHeader.split(' ')[1];
+    
+    if (!token) {
+      return res.status(401).json({ error: 'Token no proporcionado' });
+    }
+
+    const payload = jwt.verify(token, process.env.JWT_SECRET);
+    req.user = payload;
+    next();
+    
+  } catch (err) {
+    if (err.name === 'JsonWebTokenError') {
+      return res.status(401).json({ error: 'Token inválido' });
+    } else if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({ error: 'Token expirado' });
+    } else {
+      return res.status(401).json({ error: 'Error de autenticación' });
+    }
+  }
+};
+
+const verifyAdmin = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.userid) {
+      return res.status(401).json({ error: 'Usuario no autenticado' });
+    }
+
+    const client = new Client(config);
+    await client.connect();
+
+    const userResult = await client.query('SELECT rol FROM usuario WHERE userid = $1', [req.user.userid]);
+    
+    if (userResult.rows.length === 0) {
+      await client.end();
+      return res.status(404).json({ error: 'Usuario no encontrado' });
+    }
+
+    const userRole = userResult.rows[0].rol;
+    await client.end();
+
+    if (userRole !== 'admin') {
+      return res.status(403).json({ error: 'Acceso denegado. Se requieren permisos de administrador' });
+    }
+
+    next();
+    
+  } catch (error) {
+    console.error('Error en verifyAdmin:', error);
+    res.status(500).json({ error: 'Error interno del servidor' });
+  }
+};
+
 app.get('/', (req, res) => {
   res.send('API funcionando')
 })
 
 app.post('/crearusuario', async (req, res) => {
-  
   try {
-    const { userid, nombre, password } = req.body;
+    let { userid, nombre, password, rol } = req.body;
     if (!userid || !password || !nombre) {
       return res.status(400).json({ error: 'Faltan datos' });
     }
@@ -32,22 +91,27 @@ app.post('/crearusuario', async (req, res) => {
       return res.status(409).json({ error: 'El usuario ya existe' });
     }
 
+    if (!rol || rol == null) {
+      rol = "usuario";
+    }
+
+    if (rol !== "usuario" && rol !== "admin") {
+      await client.end();
+      return res.status(400).json({ error: 'El rol no es válido' });
+    }
+
     const result = await client.query(
-      'INSERT INTO usuario (userid, nombre, password) VALUES ($1, $2, $3) RETURNING userid, nombre',
-      [userid, nombre, await bcrypt.hash(password, 10)]
+      'INSERT INTO usuario (userid, nombre, password, rol) VALUES ($1, $2, $3, $4) RETURNING userid, nombre',
+      [userid, nombre, await bcrypt.hash(password, 10), rol]
     );
 
     await client.end();
-    res.status(201).json({
-      message: 'Usuario creado',
-      usuario: result.rows[0]
-    });
-
-  } catch (error) {
-    console.error('Error al crear usuario:', error);
-    res.status(500).json({ error: error.message });
+    return res.status(201).json({ user: result.rows[0] });
+  } catch (err) {
+    if (client) await client.end();
+    return res.status(500).json({ error: 'Error interno del servidor', details: err.message });
   }
-})
+});
 
 app.post('/login', async (req, res) => {
   try {
@@ -100,23 +164,9 @@ app.post('/login', async (req, res) => {
   }
 });
 
-app.get('/escucho', async (req, res) => {
+app.get('/escucho', verifyToken, async (req, res) => {
   try {
-    const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(400).json({ error: 'Token de autorización requerido' });
-    }
-
-    const token = authHeader.split(' ')[1];
-    
-    let payload;
-    try {
-      payload = jwt.verify(token, process.env.JWT_SECRET);
-    } catch (err) {
-      return res.status(401).json({ error: 'Token invalido' });
-    }
-
-    const userid = payload.userid;
+    const userid = req.user.userid;
 
     const client = new Client(config);
     await client.connect();
@@ -132,12 +182,31 @@ app.get('/escucho', async (req, res) => {
     await client.end();
 
     res.json({
-      usuario: payload.nombre,
+      usuario: req.user.nombre,
       canciones_escuchadas: result.rows
     });
 
   } catch (error) {
     console.error('Error en /escucho:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/admin/usuarios', verifyToken, verifyAdmin, async (req, res) => {
+  try {
+    const client = new Client(config);
+    await client.connect();
+
+    const result = await client.query('SELECT userid, nombre, rol FROM usuario ORDER BY userid');
+    await client.end();
+
+    res.json({
+      message: 'Lista de usuarios (solo admin)',
+      usuarios: result.rows
+    });
+
+  } catch (error) {
+    console.error('Error en /admin/usuarios:', error);
     res.status(500).json({ error: error.message });
   }
 });
