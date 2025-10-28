@@ -1,14 +1,15 @@
 import bcrypt from 'bcrypt';
-import { DatabaseService } from './databaseService.js';
+import { Usuario } from '../models/modelo_usuario.js';
+import { Escucha } from '../models/modelo_escucha.js';
+import { Cancion } from '../models/modelo_cancion.js';
 
-export class UserService extends DatabaseService {
+export class UserService {
   async createUser(userid, nombre, password, rol = 'usuario') {
-    const existingUser = await this.executeQuery(
-      'SELECT userid FROM usuario WHERE userid = $1', 
-      [userid]
-    );
+    const existingUser = await Usuario.findOne({
+      where: { userid }
+    });
     
-    if (existingUser.rows.length > 0) {
+    if (existingUser) {
       throw new Error('El usuario ya existe');
     }
 
@@ -17,25 +18,28 @@ export class UserService extends DatabaseService {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const result = await this.executeQuery(
-      'INSERT INTO usuario (userid, nombre, password, rol) VALUES ($1, $2, $3, $4) RETURNING userid, nombre',
-      [userid, nombre, hashedPassword, rol]
-    );
+    const newUser = await Usuario.create({
+      userid,
+      nombre,
+      password: hashedPassword,
+      rol
+    });
 
-    return result.rows[0];
+    return {
+      userid: newUser.userid,
+      nombre: newUser.nombre
+    };
   }
 
   async authenticateUser(userid, password) {
-    const userResult = await this.executeQuery(
-      'SELECT userid, nombre, password FROM usuario WHERE userid = $1', 
-      [userid]
-    );
+    const user = await Usuario.findOne({
+      where: { userid }
+    });
     
-    if (userResult.rows.length === 0) {
+    if (!user) {
       throw new Error('Usuario no encontrado');
     }
 
-    const user = userResult.rows[0];
     const isValidPassword = await bcrypt.compare(password, user.password);
     
     if (!isValidPassword) {
@@ -49,23 +53,30 @@ export class UserService extends DatabaseService {
   }
 
   async getUserRole(userid) {
-    const userResult = await this.executeQuery(
-      'SELECT rol FROM usuario WHERE userid = $1', 
-      [userid]
-    );
+    const user = await Usuario.findOne({
+      where: { userid },
+      attributes: ['rol']
+    });
     
-    return userResult.rows.length > 0 ? userResult.rows[0].rol : null;
+    return user ? user.rol : null;
   }
 
   async getUserListeningHistory(userid) {
-    const query = `
-      SELECT e.id, c.nombre AS cancion_nombre, e.reproducciones
-      FROM escucha e
-      JOIN cancion c ON e.cancionid = c.id
-      WHERE e.userid = $1
-    `;
+    const listenings = await Escucha.findAll({
+      where: { userid },
+      include: [{
+        model: Cancion,
+        attributes: ['nombre']
+      }],
+      attributes: ['id', 'fechaEscucha'],
+      order: [['fechaEscucha', 'DESC']]
+    });
 
-    const result = await this.executeQuery(query, [userid]);
-    return result.rows;
+    return listenings.map(listening => ({
+      id: listening.id,
+      cancion_nombre: listening.Cancion.nombre,
+      fechaEscucha: listening.fechaEscucha
+    }));
   }
 }
+
